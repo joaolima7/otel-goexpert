@@ -1,0 +1,39 @@
+version: '3'
+
+services:
+  servicea:
+    build: ./servicea
+    ports:
+      - "8080:8080"
+    environment:
+      - SERVICE_B_URL=http://serviceb:8081/weather
+      - OTEL_COLLECTOR_URL=otel-collector:4317
+    depends_on:
+      - serviceb
+      - otel-collector
+
+  serviceb:
+    build: ./serviceb
+    ports:
+      - "8081:8081"
+    environment:
+      - WEATHER_API_KEY=bfbdabb82902462aaf4190220252008
+      - OTEL_COLLECTOR_URL=otel-collector:4317
+    depends_on:
+      - otel-collector
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    ports:
+      - "4317:4317"   
+      - "4318:4318"   
+    depends_on:
+      - zipkin
+
+  zipkin:
+    image: openzipkin/zipkin:latest
+    ports:
+      - "9411:9411"
