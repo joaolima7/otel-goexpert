@@ -47,7 +47,7 @@ type ViaCepResponse struct {
 	Gia         string `json:"gia"`
 	Ddd         string `json:"ddd"`
 	Siafi       string `json:"siafi"`
-	Erro        bool   `json:"erro,omitempty"`
+	Erro        string `json:"erro,omitempty"`
 }
 
 type WeatherResponse struct {
@@ -115,15 +115,23 @@ func handleWeatherRequest(w http.ResponseWriter, r *http.Request) {
 	location, err := getCepInfo(ctx, req.Cep)
 	if err != nil {
 		if errors.Is(err, ErrCepNotFound) {
+			log.Printf("CEP not found: %s", req.Cep)
 			respondWithError(w, http.StatusNotFound, "can not find zipcode", ctx)
 			return
 		}
+		log.Printf("Internal error processing CEP %s: %v", req.Cep, err)
 		respondWithError(w, http.StatusInternalServerError, "internal server error", ctx)
 		return
 	}
 
 	weather, err := getWeatherInfo(ctx, location)
 	if err != nil {
+		if errors.Is(err, ErrCepNotFound) {
+			log.Printf("Location not found in weather API: %s", location)
+			respondWithError(w, http.StatusNotFound, "can not find zipcode", ctx)
+			return
+		}
+		log.Printf("Internal error getting weather for %s: %v", location, err)
 		respondWithError(w, http.StatusInternalServerError, "internal server error", ctx)
 		return
 	}
@@ -166,13 +174,16 @@ func getCepInfo(ctx context.Context, cep string) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("unexpected status code from ViaCEP: %d", resp.StatusCode)
-	}
-
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("error reading response body: %w", err)
+	}
+
+	log.Printf("ViaCEP response for %s: %s", cep, string(body))
+
+	if string(body) == `{"erro": "true"}` || string(body) == `{"erro":"true"}` {
+		log.Printf("CEP %s not found (error in response)", cep)
+		return "", ErrCepNotFound
 	}
 
 	var cepInfo ViaCepResponse
@@ -180,7 +191,8 @@ func getCepInfo(ctx context.Context, cep string) (string, error) {
 		return "", fmt.Errorf("error unmarshaling ViaCEP response: %w", err)
 	}
 
-	if cepInfo.Erro {
+	if cepInfo.Erro == "true" || cepInfo.Localidade == "" || cepInfo.Cep == "" {
+		log.Printf("CEP %s not found: %+v", cep, cepInfo)
 		return "", ErrCepNotFound
 	}
 
@@ -208,10 +220,16 @@ func getWeatherInfo(ctx context.Context, city string) (*WeatherResponse, error) 
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("Weather API could not find city '%s': status=%d, body=%s", city, resp.StatusCode, string(body))
+		return nil, ErrCepNotFound
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		log.Printf("Weather API error: status=%d, body=%s", resp.StatusCode, string(body))
-		return nil, fmt.Errorf("unexpected status code from Weather API: %d, body: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("unexpected status code from Weather API: %d", resp.StatusCode)
 	}
 
 	var weather WeatherResponse
@@ -223,7 +241,6 @@ func getWeatherInfo(ctx context.Context, city string) (*WeatherResponse, error) 
 	return &weather, nil
 }
 
-// Funções auxiliares para conversão de temperatura
 func celsiusToFahrenheit(celsius float64) float64 {
 	return celsius*1.8 + 32
 }
