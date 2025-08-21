@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"time"
@@ -73,7 +74,6 @@ func main() {
 	weatherApiKey = getEnv("WEATHER_API_KEY", "bfbdabb82902462aaf4190220252008")
 	collectorURL := getEnv("OTEL_COLLECTOR_URL", "otel-collector:4317")
 
-	// Configuração do OpenTelemetry
 	tp, err := initTracer(collectorURL)
 	if err != nil {
 		log.Fatalf("Failed to initialize tracer: %v", err)
@@ -86,7 +86,6 @@ func main() {
 		}
 	}()
 
-	// Configuração do router
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
@@ -108,13 +107,11 @@ func handleWeatherRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validar CEP (8 dígitos e string)
 	if !isValidCep(req.Cep) {
 		respondWithError(w, http.StatusUnprocessableEntity, "invalid zipcode", ctx)
 		return
 	}
 
-	// Buscar informações do CEP
 	location, err := getCepInfo(ctx, req.Cep)
 	if err != nil {
 		if errors.Is(err, ErrCepNotFound) {
@@ -125,14 +122,12 @@ func handleWeatherRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Buscar informações do clima
 	weather, err := getWeatherInfo(ctx, location)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "internal server error", ctx)
 		return
 	}
 
-	// Calcular temperaturas
 	tempC := weather.Current.TempC
 	tempF := celsiusToFahrenheit(tempC)
 	tempK := celsiusToKelvin(tempC)
@@ -196,26 +191,32 @@ func getWeatherInfo(ctx context.Context, city string) (*WeatherResponse, error) 
 	ctx, span := tracer.Start(ctx, "get_weather_info")
 	defer span.End()
 
-	url := fmt.Sprintf("https://api.weatherapi.com/v1/current.json?key=%s&q=%s&aqi=no", weatherApiKey, city)
+	encodedCity := url.QueryEscape(city)
+	url := fmt.Sprintf("https://api.weatherapi.com/v1/current.json?key=%s&q=%s&aqi=no", weatherApiKey, encodedCity)
 	client := http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
+		log.Printf("Error creating request to Weather API: %v", err)
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
 
 	resp, err := client.Do(req)
 	if err != nil {
+		log.Printf("Error calling Weather API: %v", err)
 		return nil, fmt.Errorf("error calling Weather API: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code from Weather API: %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("Weather API error: status=%d, body=%s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("unexpected status code from Weather API: %d, body: %s", resp.StatusCode, string(body))
 	}
 
 	var weather WeatherResponse
 	if err := json.NewDecoder(resp.Body).Decode(&weather); err != nil {
+		log.Printf("Error decoding Weather API response: %v", err)
 		return nil, fmt.Errorf("error decoding Weather API response: %w", err)
 	}
 

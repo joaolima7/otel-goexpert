@@ -44,7 +44,6 @@ func main() {
 	serviceBURL = getEnv("SERVICE_B_URL", "http://serviceb:8081/weather")
 	collectorURL := getEnv("OTEL_COLLECTOR_URL", "otel-collector:4317")
 
-	// Configuração do OpenTelemetry
 	tp, err := initTracer(collectorURL)
 	if err != nil {
 		log.Fatalf("Failed to initialize tracer: %v", err)
@@ -57,7 +56,6 @@ func main() {
 		}
 	}()
 
-	// Configuração do router
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
@@ -79,13 +77,11 @@ func handleCepRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validar CEP (8 dígitos e string)
 	if !isValidCep(req.Cep) {
 		respondWithError(w, http.StatusUnprocessableEntity, "invalid zipcode", ctx)
 		return
 	}
 
-	// Chamar Serviço B
 	resp, err := callServiceB(ctx, req.Cep)
 	if err != nil {
 		if errors.Is(err, ErrCepNotFound) {
